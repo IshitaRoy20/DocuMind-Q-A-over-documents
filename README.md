@@ -1,98 +1,146 @@
-# PDF Q&A (RAG) — Streamlit UI, semantic search only
+# DocuMind — RAG-Powered PDF Q&A
 
-A browser-based version of the PDF Q&A project. Upload PDFs, ask questions,
-get answers grounded in the documents with source citations — all through
-a chat interface instead of a terminal.
+Ask questions about your PDFs and get answers grounded in the actual content — not hallucinated, not generic. Upload documents, chat naturally, and see exactly which page every answer came from.
 
-Retrieval is **semantic-only**: embeddings + Chroma vector search. No BM25 /
-keyword layer — one retrieval path, simpler to reason about and debug.
+Built with LangChain, HuggingFace, and Chroma, wrapped in a Streamlit chat interface.
 
-## Architecture
+---
 
-```
-Browser: upload PDF(s)
-   │
-   ▼
-app.py
-   ├─ PyPDFLoader          -> extract text per page
-   ├─ RecursiveCharacterTextSplitter -> chunks (1000 chars, 150 overlap)
-   ├─ HuggingFaceEmbeddings (all-MiniLM-L6-v2) -> embed each chunk
-   └─ Chroma.from_documents -> persisted vector index (chroma_store/)
+## What it does
 
-Chat turn:
-   ConversationalRetrievalChain:
-     1. condense (chat_history + new question) -> standalone question   [LLM call]
-     2. Chroma retriever -> top-k (k=4) most similar chunks             [semantic search]
-     3. stuff chunks + standalone question into QA_PROMPT -> answer     [LLM call]
-   -> answer + source chunks displayed, chat history updated
-```
+1. **Upload** one or more PDFs through the browser
+2. **Ask questions** in a normal chat interface
+3. **Get grounded answers** — every response is generated only from retrieved content, with a citation back to the exact file and page it came from
+4. **Follow up naturally** — conversational memory means "what about the second one?" resolves correctly across turns
+
+If the answer isn't in your documents, DocuMind says so instead of making something up.
+
+---
 
 ## Features
 
-- **Drag-and-drop PDF upload** — no manual folder management, multiple files at once
-- **Chat interface** — full conversation history stays visible, styled like a normal chat app
-- **Conversational memory** — follow-up questions ("what about the second one") resolve correctly
-- **Source citations per answer** — expandable "Sources" section shows filename, page number, and the exact snippet the answer was grounded in
-- **Sidebar controls** — see which files are indexed, rebuild the index with new files, clear the chat
-- **Grounded-only answers** — the prompt forces "I don't have enough information" instead of hallucinating when the PDFs don't contain the answer
+| Feature | Description |
+|---|---|
+| 📄 Multi-PDF upload | Index any number of PDFs at once, directly from the browser |
+| 💬 Conversational chat | Full chat history + memory — follow-up questions work naturally |
+| 🔍 Semantic search | Embedding-based retrieval finds conceptually relevant content, not just keyword matches |
+| 📌 Source citations | Every answer shows the exact file, page, and text snippet it's grounded in |
+| 🚫 No hallucination by design | Prompt strictly constrains answers to retrieved context |
+| 🔄 Rebuildable index | Swap documents anytime — rebuild the index with new files in seconds |
+
+---
+
+## How it works
+
+```
+┌─────────────┐     ┌──────────────┐     ┌───────────────┐     ┌─────────────┐
+│  Upload PDF  │ ──> │  Chunk text   │ ──> │  Embed chunks  │ ──> │  Chroma DB   │
+└─────────────┘     └──────────────┘     └───────────────┘     └─────────────┘
+                                                                        │
+┌─────────────┐     ┌──────────────┐     ┌───────────────┐            │
+│   Answer +   │ <── │  LLM generates│ <── │ Retrieve top-k │ <──────────┘
+│   sources    │     │   response    │     │  similar chunks│
+└─────────────┘     └──────────────┘     └───────────────┘
+        ▲                                          ▲
+        │              ┌──────────────┐            │
+        └───────────── │ Chat history  │ ───────────┘
+                        │ (memory)      │  (standalone question
+                        └──────────────┘   condensed from history)
+```
+
+**Pipeline in detail:**
+1. `PyPDFLoader` extracts text per page from each uploaded PDF
+2. `RecursiveCharacterTextSplitter` breaks text into overlapping chunks (1000 chars, 150 overlap)
+3. `sentence-transformers/all-MiniLM-L6-v2` (via HuggingFace) embeds each chunk
+4. Chroma stores the embeddings as a searchable local vector index
+5. On each question: chat history is condensed into a standalone question, top-4 similar chunks are retrieved, and an LLM generates an answer using only that retrieved context
+
+---
+
+## Tech stack
+
+- **UI**: Streamlit
+- **Orchestration**: LangChain
+- **Embeddings**: HuggingFace `sentence-transformers`
+- **LLM inference**: HuggingFace Inference API
+- **Vector store**: Chroma (local, persisted to disk)
+- **PDF parsing**: `pypdf`
+
+---
 
 ## Setup
 
+### 1. Clone / download the project
 ```bash
-# 1. Install dependencies
-pip install -r requirements.txt
-
-# 2. Get a free HuggingFace token: https://huggingface.co/settings/tokens
-#    Copy the template and fill in your real token:
-cp .env.example .env
-#    then edit .env so it contains:
-#    HUGGINGFACEHUB_API_TOKEN=hf_xxxxxxxxxxxxxxxxxxxx
-
-# 3. Launch the app
-streamlit run app.py
+cd documind
 ```
 
-`app.py` loads `.env` automatically at startup via `python-dotenv`
-(`load_dotenv()`), so the token is picked up without needing to `export` it
-in your shell every session. `.env` is listed in `.gitignore` so it never
-gets committed — only `.env.example` (with a placeholder) should go in
-version control.
+### 2. Create a virtual environment (recommended)
+```bash
+python -m venv .venv
+.venv\Scripts\activate      # Windows
+source .venv/bin/activate   # macOS/Linux
+```
 
-This opens a browser tab (usually `http://localhost:8501`).
+### 3. Install dependencies
+```bash
+pip install -r requirements.txt
+```
 
-## How to use it
+### 4. Get a free HuggingFace API token
+Create one at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) — make sure **"Make calls to Inference Providers"** permission is enabled.
 
-1. In the sidebar, upload one or more PDFs.
-2. Click **Build / Rebuild Index** — this chunks + embeds the PDFs (takes a
-   few seconds to a minute depending on size).
-3. Ask questions in the chat box at the bottom.
-4. Expand **Sources** under any answer to see exactly which file/page it
-   came from.
-5. Upload different PDFs and rebuild the index any time to switch documents.
-   Rebuilding also clears the chat, since old chat history wouldn't make
-   sense against a different document set.
+### 5. Configure your `.env` file
+```bash
+cp .env.example .env
+```
+Edit `.env`:
+```dotenv
+HUGGINGFACEHUB_API_TOKEN="hf_your_token_here"
+```
 
-## Design notes / things worth knowing
+### 6. Run the app
+```bash
+streamlit run app.py
+```
+Opens automatically at `http://localhost:8501`.
 
-- **Why semantic-only**: simpler system, one retrieval path to tune (just
-  `TOP_K` and chunk size), and easier to explain end-to-end. The tradeoff
-  (documented honestly): exact-term lookups — an error code, an exact name —
-  can be missed if no chunk is semantically close enough to the query
-  wording. That's the known limitation of dropping BM25.
-- **`@st.cache_resource` on the embedding model**: without this, Streamlit
-  would reload the ~80MB embedding model on every single interaction
-  (Streamlit reruns the whole script on each UI event), which is slow. This
-  cache keeps it loaded across reruns within a session.
-- **Index rebuilds wipe `chroma_store/`**: this is a deliberate simplicity
-  choice for a portfolio project — one active document set at a time, no
-  stale-data confusion. A multi-session/multi-user version would need
-  per-user or per-upload namespacing instead.
-- **Two LLM calls per chat turn** (condense question + generate answer) —
-  a real latency cost of conversational memory, not free.
+---
 
-## Natural next steps
+## Usage
 
-- Add a model picker in the sidebar (swap `LLM_REPO_ID` without editing code)
-- Persist indexes across sessions instead of wiping on rebuild (e.g. one
-  Chroma collection per uploaded file set, selectable from a dropdown)
-- Deploy to Streamlit Community Cloud for a shareable public link
+1. Upload one or more PDFs in the sidebar
+2. Click **Build / Rebuild Index**
+3. Ask a question in the chat box
+4. Expand **Sources** under any answer to see the citation
+5. Use **Clear chat** to reset the conversation, or upload new PDFs and rebuild to switch documents entirely
+
+---
+
+## Design decisions & limitations
+
+- **Semantic search only** — no keyword/BM25 layer, by design, for a simpler single-path retrieval system. Trade-off: exact-term lookups (an error code, an exact name) may be missed if no chunk is semantically close to the query wording.
+- **Two LLM calls per turn** — one to condense chat history into a standalone question, one to generate the answer. This is what powers follow-up questions, but it roughly doubles latency/cost versus a single-turn Q&A system.
+- **Index rebuilds wipe the previous one** — one active document set at a time, by design, to avoid stale-data confusion in a single-user local tool.
+- **Default LLM**: `HuggingFaceH4/zephyr-7b-beta` (ungated, works out of the box). Swap `LLM_REPO_ID` in `app.py` for a different HuggingFace-hosted instruct model if desired — note gated models (e.g. Meta Llama) require requesting access first.
+
+---
+
+## Roadmap / possible extensions
+
+- [ ] Cross-encoder reranking after retrieval for higher answer precision
+- [ ] Support for additional file types (docx, txt, web pages)
+- [ ] Persist multiple document sets, selectable from a dropdown
+- [ ] Deploy to Streamlit Community Cloud for a shareable link
+
+---
+
+## Project structure
+```
+documind/
+├── app.py              # Full application: ingestion, RAG chain, and UI
+├── requirements.txt     # Pinned dependencies
+├── .env.example          # Template for required environment variables
+├── .gitignore
+└── README.md
+```
